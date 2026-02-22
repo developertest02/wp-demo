@@ -1,0 +1,299 @@
+#!/usr/bin/env bash
+# wp-undo - History navigation tool for wp
+# Manipulates session/current symlink and session/meta sequence counter
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/wp-common.sh"
+
+usage() {
+    cat >&2 <<EOF
+Usage: wp-undo [OPTIONS]
+
+Options:
+  (none)      Step back one snapshot
+  -n N        Step back N snapshots
+  --list      Print full history with sequence number, timestamp, and word count
+  --diff N    Show a colored diff between current snapshot and N steps back
+  --jump N    Restore snapshot number N absolutely (ignores current position)
+  --prune N   Delete all snapshots older than the most recent N; cannot be undone
+EOF
+    exit 1
+}
+
+# Ensure session exists
+require_session() {
+    local session_dir
+    session_dir="$(wp_session_dir)"
+    if [[ ! -d "$session_dir" ]] || [[ ! -e "$session_dir/current" ]]; then
+        wp_log ERR "No active session. Run 'wp init' first."
+        exit 1
+    fi
+}
+
+# Get the max sequence number from history files
+get_max_seq() {
+    local session_dir
+    session_dir="$(wp_session_dir)"
+    local history_dir="$session_dir/history"
+    
+    local max=0
+    shopt -s nullglob
+    for f in "$history_dir"/*.txt; do
+        if [[ -f "$f" ]]; then
+            local bname
+            bname="$(basename "$f" .txt)"
+            local num=$((10#$bname))
+            if [[ $num -gt $max ]]; then
+                max=$num
+            fi
+        fi
+    done
+    shopt -u nullglob
+    echo "$max"
+}
+
+# Step back N snapshots (default N=1)
+step_back() {
+    local n="${1:-1}"
+    local session_dir
+    session_dir="$(wp_session_dir)"
+    
+    local current_seq
+    current_seq="$(wp_seq)"
+    
+    local target=$((current_seq - n))
+    
+    if [[ $target -lt 1 ]]; then
+        wp_log ERR "Already at oldest snapshot"
+        exit 1
+    fi
+    
+    local padded_target
+    padded_target="$(printf '%04d' "$target")"
+    
+    # Update current symlink
+    ln -sfn "$session_dir/history/${padded_target}.txt" "$session_dir/current"
+    
+    # Update meta
+    local meta_file="$session_dir/meta"
+    local source_file=""
+    if [[ -f "$meta_file" ]]; then
+        source_file="$(grep '^source=' "$meta_file" | cut -d'=' -f2-)"
+    fi
+    
+    {
+        echo "seq=$target"
+        if [[ -n "$source_file" ]]; then
+            echo "source=$source_file"
+        fi
+    } > "$meta_file"
+}
+
+# List all snapshots with details
+list_history() {
+    local session_dir
+    session_dir="$(wp_session_dir)"
+    local history_dir="$session_dir/history"
+    local current_seq
+    current_seq="$(wp_seq)"
+    
+    # Get sorted list of snapshot files
+    local files=()
+    while IFS= read -r -d '' f; do
+        files+=("$f")
+    done < <(find "$history_dir" -maxdepth 1 -name '*.txt' -type f -print0 | sort -z)
+    
+    for f in "${files[@]}"; do
+        local basename
+        basename="$(basename "$f" .txt)"
+        local seq=$((10#$basename))
+        local padded
+        padded="$(printf '%04d' "$seq")"
+        
+        # Get modification time
+        local mtime
+        mtime="$(stat --format='%y' "$f" | cut -d'.' -f1)"
+        
+        # Get word count
+        local word_count
+        word_count="$(wc -w < "$f")"
+        
+        # Mark current
+        local marker=""
+        if [[ $seq -eq $current_seq ]]; then
+            marker="   ← current"
+        fi
+        
+        printf "[%s]  %s  %d words%s\n" "$padded" "$mtime" "$word_count" "$marker"
+    done
+}
+
+# Show diff between current and N steps back
+show_diff() {
+    local n="${1:-1}"
+    local session_dir
+    session_dir="$(wp_session_dir)"
+    local history_dir="$session_dir/history"
+    
+    local current_seq
+    current_seq="$(wp_seq)"
+    local target_seq=$((current_seq - n))
+    
+    if [[ $target_seq -lt 1 ]]; then
+        wp_log ERR "Nothing to diff"
+        exit 0
+    fi
+    
+    local current_padded
+    current_padded="$(printf '%04d' "$current_seq")"
+    local target_padded
+    target_padded="$(printf '%04d' "$target_seq")"
+    
+    local current_file="$history_dir/${current_padded}.txt"
+    local target_file="$history_dir/${target_padded}.txt"
+    
+    # Check if delta is available
+    if command -v delta &>/dev/null; then
+        diff --color=always <(cat "$target_file") <(cat "$current_file") | delta
+    else
+        diff --color=always <(cat "$target_file") <(cat "$current_file")
+    fi
+}
+
+# Jump to a specific snapshot number
+jump_to() {
+    local n="$1"
+    local session_dir
+    session_dir="$(wp_session_dir)"
+    local history_dir="$session_dir/history"
+    
+    local padded
+    padded="$(printf '%04d' "$n")"
+    local target_file="$history_dir/${padded}.txt"
+    
+    if [[ ! -f "$target_file" ]]; then
+        wp_log ERR "Snapshot does not exist: $padded"
+        exit 1
+    fi
+    
+    # Update current symlink
+    ln -sfn "$target_file" "$session_dir/current"
+    
+    # Update meta
+    local meta_file="$session_dir/meta"
+    local source_file=""
+    if [[ -f "$meta_file" ]]; then
+        source_file="$(grep '^source=' "$meta_file" | cut -d'=' -f2-)"
+    fi
+    
+    {
+        echo "seq=$n"
+        if [[ -n "$source_file" ]]; then
+            echo "source=$source_file"
+        fi
+    } > "$meta_file"
+    
+    echo "Restored snapshot $padded"
+}
+
+# Prune old snapshots
+prune_old() {
+    local n="$1"
+    local session_dir
+    session_dir="$(wp_session_dir)"
+    local history_dir="$session_dir/history"
+    
+    local max_seq
+    max_seq="$(get_max_seq)"
+    
+    if [[ $n -ge $max_seq ]]; then
+        echo "Nothing to prune"
+        exit 0
+    fi
+    
+    local cutoff=$((max_seq - n))
+
+    # Find files to delete (snapshots with seq <= cutoff)
+    local to_delete=()
+    for f in "$history_dir"/*.txt; do
+        if [[ -f "$f" ]]; then
+            local bname
+            bname="$(basename "$f" .txt)"
+            local seq=$((10#$bname))
+            if [[ $seq -le $cutoff ]]; then
+                to_delete+=("$f")
+            fi
+        fi
+    done
+    
+    local count=${#to_delete[@]}
+    if [[ $count -eq 0 ]]; then
+        echo "Nothing to prune"
+        exit 0
+    fi
+    
+    # Confirm with user
+    read -p "About to delete $count snapshots. Continue? [y/N] " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Cancelled."
+        exit 0
+    fi
+    
+    # Delete files
+    for f in "${to_delete[@]}"; do
+        rm "$f"
+    done
+    
+    echo "Deleted $count snapshot(s)."
+}
+
+# Main
+require_session
+
+if [[ $# -eq 0 ]]; then
+    step_back 1
+    exit 0
+fi
+
+case "$1" in
+    -n)
+        if [[ -z "${2:-}" ]]; then
+            wp_log ERR "Usage: wp-undo -n N"
+            exit 1
+        fi
+        step_back "$2"
+        ;;
+    --list)
+        list_history
+        ;;
+    --diff)
+        if [[ -z "${2:-}" ]]; then
+            wp_log ERR "Usage: wp-undo --diff N"
+            exit 1
+        fi
+        show_diff "$2"
+        ;;
+    --jump)
+        if [[ -z "${2:-}" ]]; then
+            wp_log ERR "Usage: wp-undo --jump N"
+            exit 1
+        fi
+        jump_to "$2"
+        ;;
+    --prune)
+        if [[ -z "${2:-}" ]]; then
+            wp_log ERR "Usage: wp-undo --prune N"
+            exit 1
+        fi
+        prune_old "$2"
+        ;;
+    -h|--help)
+        usage
+        ;;
+    *)
+        wp_log ERR "Unknown option: $1"
+        usage
+        ;;
+esac
