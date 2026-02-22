@@ -1,44 +1,36 @@
 #!/usr/bin/env bash
-# wp-search - Search and replace filter for wp
-# Reads from stdin, applies substitution, writes to stdout, and commits the change
+# wp-search - Search and replace filter for wp tools
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/wp-common.sh"
 
-# Default flags
+# Default options
 CASE_INSENSITIVE=""
 NTH_OCCURRENCE=""
-USE_ERE=false
 PREVIEW_MODE=false
+USE_ERE=false
 
 usage() {
     cat >&2 <<EOF
 Usage: wp-search [OPTIONS] PATTERN REPLACEMENT
 
-Perform search and replace on document text. Reads from stdin, writes to stdout.
+Search and replace text in the current session.
 
 Options:
   -i          Case-insensitive matching
-  -g          Replace all occurrences per line (default behavior)
-  -n N        Replace only the Nth occurrence globally (per line)
+  -g          Replace all occurrences per line (default)
+  -n N        Replace only the Nth occurrence globally
   -r          PATTERN is an extended regular expression (ERE)
-  -p          Preview mode: show a colored diff, do not commit
+  -p          Preview mode: show colored diff, do not commit
   -h, --help  Show this help message
 
-Examples:
-  echo "hello world" | wp-search "world" "there"
-  cat file.txt | wp-search -i "cat" "dog"
-  cat file.txt | wp-search -r '\\b(Mr|Mrs)\\.\\b' "Mx."
-  cat file.txt | wp-search -n 2 "foo" "bar"
-  cat file.txt | wp-search -p "old" "new"
-
-Note: When using -n N, only the Nth occurrence on each line is replaced.
+Input is read from session/current. Output is written to stdout and committed.
 EOF
     exit 1
 }
 
-# Parse arguments
+# Parse options
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -i)
@@ -46,14 +38,9 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -g)
-            # Default behavior, nothing to set
             shift
             ;;
         -n)
-            if [[ -z "${2:-}" ]]; then
-                wp_log ERR "Option -n requires an argument"
-                exit 1
-            fi
             NTH_OCCURRENCE="$2"
             shift 2
             ;;
@@ -78,7 +65,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Check for required arguments
+# Get pattern and replacement
 PATTERN="${1:-}"
 REPLACEMENT="${2:-}"
 
@@ -87,93 +74,51 @@ if [[ -z "$PATTERN" ]] || [[ -z "$REPLACEMENT" ]]; then
     usage
 fi
 
-# Check for session (only if not in preview mode, since preview still needs to read current)
-# Actually, we need session for all modes since we read from stdin or current
-# Per spec: "If no session is active and no FILE is provided: print a clear message, exit 1"
-# Since this tool always reads stdin, we need to check if stdin is available
-# But per the spec, we should check for session when reading from current
-# For now, let's assume stdin is always provided (pipe or redirect)
+# Check for session
+if [[ ! -d "$(wp_session_dir)" ]] || [[ ! -e "$(wp_session_dir)/current" ]]; then
+    wp_log ERR "No active session. Run 'wp init' first."
+    exit 1
+fi
 
-# Build sed command
-# Use | as delimiter to avoid issues with / in pattern/replacement
-# Escape | characters in pattern and replacement
-escape_pipe() {
+# Escape pattern and replacement for sed
+# Escape special characters: \ / . [ ] * ^ $ |
+escape_sed() {
     local str="$1"
+    str="${str//\\/\\\\}"
+    str="${str//\//\\/}"
+    str="${str//./\\.}"
+    str="${str//\[/\\[}"
+    str="${str//\]/\\]}"
+    str="${str//\*/\\*}"
+    str="${str//\^/\\^}"
+    str="${str//\$/\\$}"
     str="${str//|/\\|}"
     echo "$str"
 }
 
-ESCAPED_PATTERN="$(escape_pipe "$PATTERN")"
-ESCAPED_REPLACEMENT="$(escape_pipe "$REPLACEMENT")"
+ESCAPED_PATTERN=$(escape_sed "$PATTERN")
+ESCAPED_REPLACEMENT=$(escape_sed "$REPLACEMENT")
 
-# Build sed flags
-SED_FLAGS="g"
-if [[ -n "$CASE_INSENSITIVE" ]]; then
-    SED_FLAGS="${SED_FLAGS}${CASE_INSENSITIVE}"
-fi
+# Build sed command
+SED_FLAGS="g${CASE_INSENSITIVE}"
+
 if [[ -n "$NTH_OCCURRENCE" ]]; then
-    # Nth occurrence replaces the 'g' flag
-    SED_FLAGS="$NTH_OCCURRENCE"
+    # Nth occurrence only (not global)
+    SED_FLAGS="$NTH_OCCURRENCE${CASE_INSENSITIVE}"
 fi
 
-# ERE flag is -E option, not in substitution flags
-ERE_FLAG=""
-if $USE_ERE; then
-    ERE_FLAG="-E"
-fi
+# Perform substitution
+CURRENT="$(wp_current)"
+RESULT=$(sed -E "s|${ESCAPED_PATTERN}|${ESCAPED_REPLACEMENT}|${SED_FLAGS}" "$CURRENT")
 
-# Build the sed command
-SED_CMD="sed $ERE_FLAG 's|${ESCAPED_PATTERN}|${ESCAPED_REPLACEMENT}|${SED_FLAGS}'"
-
-# Read input from stdin
-INPUT="$(cat)"
-
-# Handle empty input
-if [[ -z "$INPUT" ]]; then
-    if $PREVIEW_MODE; then
-        exit 0
-    fi
-    # For non-preview, still commit empty input
-    echo -n "" | wp_commit >/dev/null
+if [[ "$PREVIEW_MODE" == true ]]; then
+    # Preview mode: show diff without committing
+    TEMP_FILE=$(mktemp)
+    echo "$RESULT" > "$TEMP_FILE"
+    diff --color=always "$CURRENT" "$TEMP_FILE" || true
+    rm -f "$TEMP_FILE"
     exit 0
 fi
 
-# Apply substitution
-if $USE_ERE; then
-    RESULT="$(echo "$INPUT" | sed -E "s|${ESCAPED_PATTERN}|${ESCAPED_REPLACEMENT}|${SED_FLAGS}")"
-else
-    RESULT="$(echo "$INPUT" | sed "s|${ESCAPED_PATTERN}|${ESCAPED_REPLACEMENT}|${SED_FLAGS}")"
-fi
-
-# Preview mode: show diff, don't commit
-if $PREVIEW_MODE; then
-    # Create temp files for diff
-    TMP_CURRENT=$(mktemp)
-    TMP_NEW=$(mktemp)
-    trap "rm -f '$TMP_CURRENT' '$TMP_NEW'" EXIT
-    
-    # Get current session content
-    if command -v wp_current &>/dev/null && CURRENT_FILE="$(wp_current 2>/dev/null)"; then
-        cat "$CURRENT_FILE" > "$TMP_CURRENT"
-    else
-        # No session, use empty
-        echo -n "" > "$TMP_CURRENT"
-    fi
-    
-    echo "$RESULT" > "$TMP_NEW"
-    
-    # Show colored diff
-    if command -v delta &>/dev/null; then
-        diff --color=always "$TMP_CURRENT" "$TMP_NEW" | delta || true
-    else
-        diff --color=always "$TMP_CURRENT" "$TMP_NEW" || true
-    fi
-    
-    exit 0
-fi
-
-# Non-preview mode: commit the result
+# Commit the result
 echo "$RESULT" | wp_commit >/dev/null
-
-# Output to stdout as well
-echo "$RESULT"

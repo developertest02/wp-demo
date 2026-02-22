@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# wp-spell - Spell Pipeline Assembler
+# Assembles the five spell stages into one runnable command
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+DICT="${SCRIPT_DIR}/../../lib/dictionary.txt"
+INPUT=""
+USE_STDIN=false
+
+# Parse options
+COUNT_ONLY=false
+ADD_WORD=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -d)
+            DICT="$2"
+            shift 2
+            ;;
+        -a)
+            ADD_WORD="$2"
+            shift 2
+            ;;
+        --count)
+            COUNT_ONLY=true
+            shift
+            ;;
+        --no-commit)
+            # This flag is for compatibility with wp run, but wp-spell doesn't commit anyway
+            shift
+            ;;
+        -*)
+            echo "Usage: wp-spell [OPTIONS] [FILE]" >&2
+            echo "Options:" >&2
+            echo "  -d FILE    Use alternate dictionary file" >&2
+            echo "  -a WORD    Add WORD to dictionary, then exit" >&2
+            echo "  --count    Print only the count of misspelled words" >&2
+            echo "  --no-commit Force read-only mode (no effect, wp-spell never commits)" >&2
+            exit 1
+            ;;
+        *)
+            # Positional argument (file)
+            if [[ -z "$INPUT" ]]; then
+                INPUT="$1"
+            fi
+            shift
+            ;;
+    esac
+done
+
+# Handle -a flag: add word to dictionary
+if [[ -n "$ADD_WORD" ]]; then
+    "${SCRIPT_DIR}/wp-spell-mismatch" -d "$DICT" -a "$ADD_WORD"
+    exit 0
+fi
+
+# Resolve input source
+# If no input file specified and stdin is a terminal, require session
+# If stdin is not a terminal (piped), read from stdin
+if [[ -n "$INPUT" ]]; then
+    SOURCE="$INPUT"
+    USE_STDIN=false
+elif [[ ! -t 0 ]]; then
+    # stdin is piped
+    USE_STDIN=true
+else
+    source "${SCRIPT_DIR}/../../lib/wp-common.sh"
+    SOURCE="$(wp_current)" || {
+        echo "Error: No active session and no file provided." >&2
+        echo "Run 'wp init <file>' first, or provide a file argument." >&2
+        exit 1
+    }
+fi
+
+# Run the spell pipeline
+run_pipeline() {
+    "${SCRIPT_DIR}/wp-spell-words" \
+        | "${SCRIPT_DIR}/wp-spell-lower" \
+        | sort \
+        | "${SCRIPT_DIR}/wp-spell-unique" \
+        | "${SCRIPT_DIR}/wp-spell-mismatch" -d "$DICT"
+}
+
+if [[ "$USE_STDIN" == true ]]; then
+    if [[ "$COUNT_ONLY" == true ]]; then
+        RESULT=$(run_pipeline)
+        echo "$RESULT" | grep -c . || echo "0"
+    else
+        run_pipeline
+    fi
+else
+    if [[ "$COUNT_ONLY" == true ]]; then
+        RESULT=$(cat "$SOURCE" | run_pipeline)
+        echo "$RESULT" | grep -c . || echo "0"
+    else
+        cat "$SOURCE" | run_pipeline
+    fi
+fi
