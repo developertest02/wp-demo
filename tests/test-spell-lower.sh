@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/harness.sh"
+source "$SCRIPT_DIR/spell_lower_test_harness.sh"
 
 SCRIPT="$SCRIPT_DIR/../bin/spell/wp-spell-lower"
 
