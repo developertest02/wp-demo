@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# wp-search - Search and replace filter for wp tools
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/wp-common.sh"
+
+# Default options
+CASE_INSENSITIVE=""
+NTH_OCCURRENCE=""
+PREVIEW_MODE=false
+USE_ERE=false
+
+usage() {
+    cat >&2 <<EOF
+Usage: wp-search [OPTIONS] PATTERN REPLACEMENT
+
+Search and replace text in the current session.
+
+Options:
+  -i          Case-insensitive matching
+  -g          Replace all occurrences per line (default)
+  -n N        Replace only the Nth occurrence globally
+  -r          PATTERN is an extended regular expression (ERE)
+  -p          Preview mode: show colored diff, do not commit
+  -h, --help  Show this help message
+
+Input is read from session/current. Output is written to stdout and committed.
+EOF
+    exit 1
+}
+
+# Parse options
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -i)
+            CASE_INSENSITIVE="I"
+            shift
+            ;;
+        -g)
+            shift
+            ;;
+        -n)
+            NTH_OCCURRENCE="$2"
+            shift 2
+            ;;
+        -r)
+            USE_ERE=true
+            shift
+            ;;
+        -p)
+            PREVIEW_MODE=true
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        -*)
+            wp_log ERR "Unknown option: $1"
+            usage
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+# Get pattern and replacement
+PATTERN="${1:-}"
+REPLACEMENT="${2:-}"
+
+if [[ -z "$PATTERN" ]] || [[ -z "$REPLACEMENT" ]]; then
+    wp_log ERR "PATTERN and REPLACEMENT are required"
+    usage
+fi
+
+# Check for session
+if [[ ! -d "$(wp_session_dir)" ]] || [[ ! -e "$(wp_session_dir)/current" ]]; then
+    wp_log ERR "No active session. Run 'wp init' first."
+    exit 1
+fi
+
+# Escape pattern and replacement for sed
+# Escape special characters: \ / . [ ] * ^ $ |
+escape_sed() {
+    local str="$1"
+    str="${str//\\/\\\\}"
+    str="${str//\//\\/}"
+    str="${str//./\\.}"
+    str="${str//\[/\\[}"
+    str="${str//\]/\\]}"
+    str="${str//\*/\\*}"
+    str="${str//\^/\\^}"
+    str="${str//\$/\\$}"
+    str="${str//|/\\|}"
+    echo "$str"
+}
+
+ESCAPED_PATTERN=$(escape_sed "$PATTERN")
+ESCAPED_REPLACEMENT=$(escape_sed "$REPLACEMENT")
+
+# Build sed command
+SED_FLAGS="g${CASE_INSENSITIVE}"
+
+if [[ -n "$NTH_OCCURRENCE" ]]; then
+    # Nth occurrence only (not global)
+    SED_FLAGS="$NTH_OCCURRENCE${CASE_INSENSITIVE}"
+fi
+
+# Perform substitution
+CURRENT="$(wp_current)"
+RESULT=$(sed -E "s|${ESCAPED_PATTERN}|${ESCAPED_REPLACEMENT}|${SED_FLAGS}" "$CURRENT")
+
+if [[ "$PREVIEW_MODE" == true ]]; then
+    # Preview mode: show diff without committing
+    TEMP_FILE=$(mktemp)
+    echo "$RESULT" > "$TEMP_FILE"
+    diff --color=always "$CURRENT" "$TEMP_FILE" || true
+    rm -f "$TEMP_FILE"
+    exit 0
+fi
+
+# Commit the result
+echo "$RESULT" | wp_commit >/dev/null

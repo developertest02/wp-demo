@@ -15,12 +15,12 @@ assert_eq() {
 
     if [[ "$expected" == "$actual" ]]; then
         echo "PASS: $description"
-        ((TESTS_PASSED++))
+        TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         echo "FAIL: $description"
         echo "  Expected: $expected"
         echo "  Actual:   $actual"
-        ((TESTS_FAILED++))
+        TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
 }
 
@@ -33,11 +33,28 @@ assert_contains() {
 
     if [[ "$haystack" == *"$needle"* ]]; then
         echo "PASS: $description"
-        ((TESTS_PASSED++))
+        TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         echo "FAIL: $description"
         echo "  Expected '$needle' to be in: $haystack"
-        ((TESTS_FAILED++))
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+# assert_not_contains DESCRIPTION HAYSTACK NEEDLE
+# Passes if NEEDLE is NOT a substring of HAYSTACK
+assert_not_contains() {
+    local description="$1"
+    local haystack="$2"
+    local needle="$3"
+
+    if [[ "$haystack" != *"$needle"* ]]; then
+        echo "PASS: $description"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "FAIL: $description"
+        echo "  Did not expect '$needle' to be in: $haystack"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
 }
 
@@ -50,12 +67,12 @@ assert_exit_code() {
 
     if [[ "$expected" -eq "$actual" ]]; then
         echo "PASS: $description"
-        ((TESTS_PASSED++))
+        TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         echo "FAIL: $description"
         echo "  Expected exit code: $expected"
         echo "  Actual exit code:   $actual"
-        ((TESTS_FAILED++))
+        TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
 }
 
