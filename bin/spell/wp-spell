@@ -5,7 +5,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-DICT="${SCRIPT_DIR}/../../lib/dictionary.txt"
+# Determine installation directory
+# If wp-spell is in INSTALL_DIR/bin/spell, data is in INSTALL_DIR/lib
+# If wp-spell is in project bin/spell, data is in project lib
+if [[ "$SCRIPT_DIR" == */bin/spell ]]; then
+    INSTALL_ROOT="${SCRIPT_DIR%/bin/spell}"
+else
+    INSTALL_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+fi
+
+DICT="${INSTALL_ROOT}/lib/dictionary.txt"
 INPUT=""
 USE_STDIN=false
 
@@ -66,7 +75,7 @@ elif [[ ! -t 0 ]]; then
     # stdin is piped
     USE_STDIN=true
 else
-    source "${SCRIPT_DIR}/../../lib/wp-common.sh"
+    source "${INSTALL_ROOT}/lib/wp-common.sh"
     SOURCE="$(wp_current)" || {
         echo "Error: No active session and no file provided." >&2
         echo "Run 'wp init <file>' first, or provide a file argument." >&2

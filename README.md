@@ -18,14 +18,14 @@ A Unix-style text editing pipeline toolkit built with bash. The project provides
 # 1. Initialize a session with your document
 wp init myfile.txt
 
-# 2. Check spelling
-wp pipe | bin/spell/wp-spell
+# 2. Check spelling (after installation, wp-spell is available in PATH)
+wp pipe | wp-spell
 
 # 3. Fix a misspelling
 wp run wp-search "kittne" "kitten"
 
 # 4. View document statistics
-wp pipe | bin/wp-stats -w
+wp pipe | wp-stats -w
 
 # 5. Undo if needed
 wp-undo
@@ -186,13 +186,34 @@ All tests use `tests/harness.sh` which provides:
 make install
 ```
 
-Installs to `~/.local/bin` by default. Override with:
+Installs scripts to `~/.local/bin` and data files to `~/.local/share/wp-demo/` by default.
+
+| Variable | Default | Description |
+|---|---|---|
+| `INSTALL_DIR` | `~/.local/bin` | Where to install executable scripts |
+| `INSTALL_DATA_DIR` | `~/.local/share/wp-demo` | Where to install data files and spell scripts |
+
+To override:
 
 ```bash
-make install INSTALL_DIR=/usr/local/bin
+make install INSTALL_DIR=/usr/local/bin INSTALL_DATA_DIR=/usr/local/share/wp-demo
+```
+
+After installation, ensure `~/.local/bin` is in your `PATH`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+### Uninstall
+
+```bash
+make uninstall
 ```
 
 ## Project Structure
+
+Source repository layout:
 
 ```
 wp-demo/
@@ -217,6 +238,29 @@ wp-demo/
 │   └── fixtures/       # Test fixtures
 ├── Makefile
 └── README.md
+```
+
+After `make install`:
+
+```
+~/.local/bin/
+├── wp              # Main dispatcher
+├── wp-search       # Search and replace
+├── wp-stats        # Document statistics
+├── wp-undo         # Undo last change
+└── wp-spell        # Wrapper script for spell checker
+
+~/.local/share/wp-demo/
+├── bin/spell/
+│   ├── wp-spell          # Spell pipeline assembler
+│   ├── wp-spell-words    # Extract words
+│   ├── wp-spell-lower    # Convert to lowercase
+│   ├── wp-spell-unique   # Remove duplicates
+│   └── wp-spell-mismatch # Compare against dictionary
+└── lib/
+    ├── wp-common.sh    # Shared library
+    ├── dictionary.txt  # Spell check dictionary
+    └── stopwords.txt   # Common words list
 ```
 
 ## Session Structure
