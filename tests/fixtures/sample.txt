@@ -1,0 +1,5 @@
+The quick brown fox jumps over the lazy dog. This sentence contains every letter in the alphabet.
+
+Programming is the art of telling computers what to do. Software developers write code daily.
+
+Testing ensures that programs work correctly. Good tests save time and prevent bugs.

@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# bin/wp-stats - Word, Line & Character Statistics
+# Reads from stdin or file, outputs formatted statistics report
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$(dirname "$SCRIPT_DIR")/lib"
+STOPWORDS_FILE="$LIB_DIR/stopwords.txt"
+
+# Default flags
+SHOW_WORDS=false
+SHOW_LINES=false
+SHOW_CHARS=false
+SHOW_SENTENCES=false
+SHOW_PARAGRAPHS=false
+SHOW_FREQ=0
+SHOW_AVG=false
+
+# Parse arguments
+FILE=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -w)
+            SHOW_WORDS=true
+            shift
+            ;;
+        -l)
+            SHOW_LINES=true
+            shift
+            ;;
+        -c)
+            SHOW_CHARS=true
+            shift
+            ;;
+        -s)
+            SHOW_SENTENCES=true
+            shift
+            ;;
+        -p)
+            SHOW_PARAGRAPHS=true
+            shift
+            ;;
+        --freq)
+            SHOW_FREQ="$2"
+            shift 2
+            ;;
+        --avg)
+            SHOW_AVG=true
+            shift
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            exit 1
+            ;;
+        *)
+            FILE="$1"
+            shift
+            ;;
+    esac
+done
+
+# Read input
+if [[ -n "$FILE" ]]; then
+    INPUT=$(cat "$FILE")
+else
+    INPUT=$(cat)
+fi
+
+# Handle empty input
+if [[ -z "$INPUT" ]]; then
+    if $SHOW_WORDS; then
+        echo "0"
+    elif $SHOW_LINES; then
+        echo "0"
+    elif $SHOW_CHARS; then
+        echo "0"
+    elif $SHOW_SENTENCES; then
+        echo "0"
+    elif $SHOW_PARAGRAPHS; then
+        echo "0"
+    elif [[ "$SHOW_FREQ" -gt 0 ]]; then
+        : # No output for empty freq
+    elif $SHOW_AVG; then
+        echo "0.00"
+        echo "0.00"
+    else
+        # Full report with zeros
+        echo "──────────────────────────────"
+        echo " Document Statistics"
+        echo "──────────────────────────────"
+        printf " Lines           : %10d\n" 0
+        printf " Words           : %10d\n" 0
+        printf " Characters      : %10d\n" 0
+        printf " Sentences       : %10d\n" 0
+        printf " Paragraphs      : %10d\n" 0
+        printf " Avg word length : %10.2f\n" 0
+        printf " Avg words/sent  : %10.2f\n" 0
+        echo "──────────────────────────────"
+    fi
+    exit 0
+fi
+
+# Compute statistics
+WORD_COUNT=$(printf '%s' "$INPUT" | wc -w | tr -d ' ')
+LINE_COUNT=$(printf '%s' "$INPUT" | wc -l | tr -d ' ')
+CHAR_COUNT=$(printf '%s' "$INPUT" | wc -m | tr -d ' ')
+# Use subshell to avoid pipefail issues with grep
+SENTENCE_COUNT=$(set +o pipefail; printf '%s' "$INPUT" | grep -oE '[.!?](\s|$)' | wc -l | tr -d ' ')
+SENTENCE_COUNT=${SENTENCE_COUNT:-0}
+PARAGRAPH_COUNT=$(printf '%s' "$INPUT" | awk 'BEGIN{p=1} /^[[:space:]]*$/{if(!b){p++; b=1}} /[^[:space:]]/{b=0} END{print p}')
+
+# Format number with thousands separator
+format_number() {
+    printf "%'d" "$1" 2>/dev/null || echo "$1"
+}
+
+# Check if single stat mode (exactly one flag)
+SINGLE_STAT=false
+STAT_COUNT=0
+$SHOW_WORDS && ((STAT_COUNT++)) || true
+$SHOW_LINES && ((STAT_COUNT++)) || true
+$SHOW_CHARS && ((STAT_COUNT++)) || true
+$SHOW_SENTENCES && ((STAT_COUNT++)) || true
+$SHOW_PARAGRAPHS && ((STAT_COUNT++)) || true
+[[ "$SHOW_FREQ" -gt 0 ]] && ((STAT_COUNT++)) || true
+$SHOW_AVG && ((STAT_COUNT++)) || true
+
+if [[ "$STAT_COUNT" -eq 1 ]]; then
+    SINGLE_STAT=true
+fi
+
+# Output based on flags
+if $SHOW_WORDS; then
+    if $SINGLE_STAT; then
+        echo "$WORD_COUNT"
+    else
+        printf " Words           : %10s\n" "$(format_number "$WORD_COUNT")"
+    fi
+fi
+
+if $SHOW_LINES; then
+    if $SINGLE_STAT; then
+        echo "$LINE_COUNT"
+    else
+        printf " Lines           : %10s\n" "$(format_number "$LINE_COUNT")"
+    fi
+fi
+
+if $SHOW_CHARS; then
+    if $SINGLE_STAT; then
+        echo "$CHAR_COUNT"
+    else
+        printf " Characters      : %10s\n" "$(format_number "$CHAR_COUNT")"
+    fi
+fi
+
+if $SHOW_SENTENCES; then
+    if $SINGLE_STAT; then
+        echo "$SENTENCE_COUNT"
+    else
+        printf " Sentences       : %10s\n" "$(format_number "$SENTENCE_COUNT")"
+    fi
+fi
+
+if $SHOW_PARAGRAPHS; then
+    if $SINGLE_STAT; then
+        echo "$PARAGRAPH_COUNT"
+    else
+        printf " Paragraphs      : %10s\n" "$(format_number "$PARAGRAPH_COUNT")"
+    fi
+fi
+
+if [[ "$SHOW_FREQ" -gt 0 ]]; then
+    FREQ_OUTPUT=$(echo "$INPUT" | tr -cs 'A-Za-z' '\n' \
+        | tr 'A-Z' 'a-z' \
+        | grep -v '^$' \
+        | grep -vFf "$STOPWORDS_FILE" \
+        | sort \
+        | uniq -c \
+        | sort -rn \
+        | head -"$SHOW_FREQ" \
+        | awk '{printf "  %-20s %d\n", $2, $1}')
+    if $SINGLE_STAT; then
+        echo "$FREQ_OUTPUT"
+    else
+        echo "$FREQ_OUTPUT"
+    fi
+fi
+
+if $SHOW_AVG; then
+    # Average word length
+    AVG_WORD_LEN=$(echo "$INPUT" | tr -cs 'A-Za-z' '\n' | grep -v '^$' | awk '{ total += length($0); count++ } END { if(count>0) printf "%.2f\n", total/count; else print "0.00" }')
+    
+    # Average words per sentence
+    if [[ "$SENTENCE_COUNT" -gt 0 ]]; then
+        AVG_WORDS_SENT=$(awk "BEGIN { printf \"%.2f\n\", $WORD_COUNT / $SENTENCE_COUNT }")
+    else
+        AVG_WORDS_SENT="0.00"
+    fi
+    
+    if $SINGLE_STAT; then
+        echo "$AVG_WORD_LEN"
+        echo "$AVG_WORDS_SENT"
+    else
+        printf " Avg word length : %10s\n" "$AVG_WORD_LEN"
+        printf " Avg words/sent  : %10s\n" "$AVG_WORDS_SENT"
+    fi
+fi
+
+# Full report if no flags specified
+if ! $SHOW_WORDS && ! $SHOW_LINES && ! $SHOW_CHARS && ! $SHOW_SENTENCES && ! $SHOW_PARAGRAPHS && [[ "$SHOW_FREQ" -eq 0 ]] && ! $SHOW_AVG; then
+    # Compute averages for full report
+    AVG_WORD_LEN=$(echo "$INPUT" | tr -cs 'A-Za-z' '\n' | grep -v '^$' | awk '{ total += length($0); count++ } END { if(count>0) printf "%.2f\n", total/count; else print "0.00" }')
+    
+    if [[ "$SENTENCE_COUNT" -gt 0 ]]; then
+        AVG_WORDS_SENT=$(awk "BEGIN { printf \"%.2f\n\", $WORD_COUNT / $SENTENCE_COUNT }")
+    else
+        AVG_WORDS_SENT="0.00"
+    fi
+    
+    echo "──────────────────────────────"
+    echo " Document Statistics"
+    echo "──────────────────────────────"
+    printf " Lines           : %10s\n" "$(format_number "$LINE_COUNT")"
+    printf " Words           : %10s\n" "$(format_number "$WORD_COUNT")"
+    printf " Characters      : %10s\n" "$(format_number "$CHAR_COUNT")"
+    printf " Sentences       : %10s\n" "$(format_number "$SENTENCE_COUNT")"
+    printf " Paragraphs      : %10s\n" "$(format_number "$PARAGRAPH_COUNT")"
+    printf " Avg word length : %10s\n" "$AVG_WORD_LEN"
+    printf " Avg words/sent  : %10s\n" "$AVG_WORDS_SENT"
+    echo "──────────────────────────────"
+fi
