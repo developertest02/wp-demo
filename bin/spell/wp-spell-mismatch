@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# wp-spell-mismatch - Fifth stage of spell-check pipeline
+# Compares processed word list against dictionary, outputs misspellings
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DICT="${SCRIPT_DIR}/../../lib/dictionary.txt"
+
+# Parse flags
+ALT_DICT=""
+APPEND_WORD=""
+
+while getopts "d:a:" opt; do
+    case "$opt" in
+        d)
+            ALT_DICT="$OPTARG"
+            ;;
+        a)
+            APPEND_WORD="$OPTARG"
+            ;;
+        *)
+            echo "Usage: $0 [-d DICT_FILE] [-a WORD]" >&2
+            exit 1
+            ;;
+    esac
+done
+
+# Use alternate dictionary if provided
+if [ -n "$ALT_DICT" ]; then
+    DICT="$ALT_DICT"
+fi
+
+# Handle -a flag: append word to dictionary and re-sort
+if [ -n "$APPEND_WORD" ]; then
+    # Convert to lowercase for consistency
+    LOWER_WORD=$(echo "$APPEND_WORD" | tr 'A-Z' 'a-z')
+    echo "$LOWER_WORD" >> "$DICT"
+    sort -o "$DICT" "$DICT"
+    exit 0
+fi
+
+# Compare stdin word list against dictionary
+# comm -23: output lines only in first file (stdin), not in second (dictionary)
+comm -23 - "$DICT"

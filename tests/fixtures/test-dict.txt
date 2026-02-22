@@ -1,0 +1,17 @@
+apple
+banana
+cat
+dog
+elephant
+fox
+grape
+hello
+kitten
+lemon
+monkey
+orange
+puppy
+quick
+rabbit
+the
+world
