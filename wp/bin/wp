@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Main dispatcher for the Word Processor tool
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Source the common library
+source "$WP_ROOT/lib/wp-common.sh"
+
+usage() {
+    cat <<EOF
+Usage: wp <subcommand> [options]
+
+Subcommands:
+  init <file>       Initialize a new session with the given file
+  save [outfile]    Save current snapshot to outfile (default: original source)
+  run <script>      Pipe current snapshot through bin/<script>, commit result
+  pipe              Output current snapshot to stdout
+  status            Show session status (source, snapshot number, word count)
+  clean             Remove the session directory (with confirmation)
+
+EOF
+    exit 1
+}
+
+# Check if session exists (for commands that require it)
+require_session() {
+    if [[ ! -d "$(wp_session_dir)" ]]; then
+        wp_log ERR "No active session. Run 'wp init <file>' first."
+        exit 1
+    fi
+    if [[ ! -e "$(wp_current 2>/dev/null)" ]]; then
+        wp_log ERR "No active session. Run 'wp init <file>' first."
+        exit 1
+    fi
+}
+
+cmd_init() {
+    local input_file="$1"
+    
+    if [[ -z "$input_file" ]]; then
+        wp_log ERR "Usage: wp init <file>"
+        exit 1
+    fi
+    
+    # Check if file exists
+    if [[ ! -f "$input_file" ]]; then
+        wp_log ERR "File not found: $input_file"
+        exit 1
+    fi
+    
+    local session_dir="$(wp_session_dir)"
+    
+    # Create session directory structure
+    mkdir -p "$session_dir/history"
+    
+    # Copy input file to first snapshot
+    cp "$input_file" "$session_dir/history/0001.txt"
+    
+    # Create symlink to current snapshot
+    ln -sf "history/0001.txt" "$session_dir/current"
+    
+    # Write meta file
+    cat > "$session_dir/meta" <<EOF
+seq=0001
+source=$input_file
+EOF
+    
+    wp_log INFO "Initialized session with: $input_file"
+}
+
+cmd_save() {
+    require_session
+    
+    local outfile="${1:-}"
+    
+    # Get original source filename from meta if no outfile specified
+    if [[ -z "$outfile" ]]; then
+        outfile="$(grep '^source=' "$(wp_session_dir)/meta" | cut -d'=' -f2-)"
+    fi
+    
+    cp "$(wp_current)" "$outfile"
+    wp_log INFO "Saved to: $outfile"
+}
+
+cmd_run() {
+    require_session
+    
+    local script="$1"
+    shift || true
+    
+    if [[ -z "$script" ]]; then
+        wp_log ERR "Usage: wp run <script> [args]"
+        exit 1
+    fi
+    
+    local script_path="$WP_ROOT/bin/$script"
+    
+    if [[ ! -f "$script_path" ]]; then
+        wp_log ERR "Script not found: $script"
+        exit 1
+    fi
+    
+    # Pipe current through script and commit result
+    cat "$(wp_current)" | "$script_path" "$@" | wp_commit
+}
+
+cmd_pipe() {
+    require_session
+    cat "$(wp_current)"
+}
+
+cmd_status() {
+    require_session
+    
+    local session_dir="$(wp_session_dir)"
+    local source_file="$(grep '^source=' "$session_dir/meta" | cut -d'=' -f2-)"
+    local seq="$(wp_seq)"
+    local word_count="$(wc -w < "$(wp_current)")"
+    
+    echo "Source: $source_file"
+    echo "Snapshot: $seq"
+    echo "Word count: $word_count"
+}
+
+cmd_clean() {
+    local session_dir="$(wp_session_dir)"
+    
+    if [[ ! -d "$session_dir" ]]; then
+        wp_log WARN "No session directory to clean"
+        return 0
+    fi
+    
+    read -p "Remove session directory '$session_dir'? [y/N] " confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        rm -rf "$session_dir"
+        wp_log INFO "Session directory removed"
+    else
+        wp_log INFO "Clean cancelled"
+    fi
+}
+
+# Main dispatch
+if [[ $# -lt 1 ]]; then
+    usage
+fi
+
+subcommand="$1"
+shift
+
+case "$subcommand" in
+    init)
+        cmd_init "$@"
+        ;;
+    save)
+        cmd_save "$@"
+        ;;
+    run)
+        cmd_run "$@"
+        ;;
+    pipe)
+        cmd_pipe "$@"
+        ;;
+    status)
+        cmd_status "$@"
+        ;;
+    clean)
+        cmd_clean "$@"
+        ;;
+    *)
+        wp_log ERR "Unknown subcommand: $subcommand"
+        usage
+        ;;
+esac
