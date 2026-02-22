@@ -9,7 +9,7 @@ TEST_DICT="$PROJECT_DIR/tests/fixtures/test-dict.txt"
 TEMP_DICT=""
 
 # Source test harness
-source "$SCRIPT_DIR/harness.sh"
+source "$SCRIPT_DIR/spell_mismatch_test_harness.sh"
 
 # Setup: create a temp copy of test dictionary for -a flag tests
 setup() {
