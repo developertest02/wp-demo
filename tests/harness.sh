@@ -15,12 +15,12 @@ assert_eq() {
 
     if [[ "$expected" == "$actual" ]]; then
         echo "PASS: $description"
-        ((TESTS_PASSED++))
+        ((TESTS_PASSED++)) || true
     else
         echo "FAIL: $description"
         echo "  Expected: $expected"
         echo "  Actual:   $actual"
-        ((TESTS_FAILED++))
+        ((TESTS_FAILED++)) || true
     fi
 }
 
@@ -33,11 +33,11 @@ assert_contains() {
 
     if [[ "$haystack" == *"$needle"* ]]; then
         echo "PASS: $description"
-        ((TESTS_PASSED++))
+        ((TESTS_PASSED++)) || true
     else
         echo "FAIL: $description"
         echo "  Expected '$needle' to be in: $haystack"
-        ((TESTS_FAILED++))
+        ((TESTS_FAILED++)) || true
     fi
 }
 
@@ -50,12 +50,12 @@ assert_exit_code() {
 
     if [[ "$expected" -eq "$actual" ]]; then
         echo "PASS: $description"
-        ((TESTS_PASSED++))
+        ((TESTS_PASSED++)) || true
     else
         echo "FAIL: $description"
         echo "  Expected exit code: $expected"
         echo "  Actual exit code:   $actual"
-        ((TESTS_FAILED++))
+        ((TESTS_FAILED++)) || true
     fi
 }
 
