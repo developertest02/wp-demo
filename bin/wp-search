@@ -80,24 +80,32 @@ if [[ ! -d "$(wp_session_dir)" ]] || [[ ! -e "$(wp_session_dir)/current" ]]; the
     exit 1
 fi
 
-# Escape pattern and replacement for sed
-# Escape special characters: \ / . [ ] * ^ $ |
-escape_sed() {
+# Escape string for use in sed replacement
+escape_replacement_sed() {
     local str="$1"
+    # Escape backslash, ampersand, and delimiter
     str="${str//\\/\\\\}"
+    str="${str//\&/\\&}"
     str="${str//\//\\/}"
-    str="${str//./\\.}"
+    echo "$str"
+}
+
+# Escape pattern for literal matching in sed (basic regex)
+escape_pattern_basic() {
+    local str="$1"
+    # Escape special regex characters for literal match
+    str="${str//\\/\\\\}"
+    str="${str//\./\\.}"
     str="${str//\[/\\[}"
     str="${str//\]/\\]}"
     str="${str//\*/\\*}"
     str="${str//\^/\\^}"
     str="${str//\$/\\$}"
-    str="${str//|/\\|}"
+    str="${str//\//\\/}"
     echo "$str"
 }
 
-ESCAPED_PATTERN=$(escape_sed "$PATTERN")
-ESCAPED_REPLACEMENT=$(escape_sed "$REPLACEMENT")
+ESCAPED_REPLACEMENT=$(escape_replacement_sed "$REPLACEMENT")
 
 # Build sed command
 SED_FLAGS="g${CASE_INSENSITIVE}"
@@ -109,7 +117,36 @@ fi
 
 # Perform substitution
 CURRENT="$(wp_current)"
-RESULT=$(sed -E "s|${ESCAPED_PATTERN}|${ESCAPED_REPLACEMENT}|${SED_FLAGS}" "$CURRENT")
+
+# Read content from stdin if provided, otherwise from current file
+if [[ ! -t 0 ]]; then
+    # stdin is being piped
+    INPUT=$(cat)
+    TEMP_INPUT=$(mktemp)
+    echo "$INPUT" > "$TEMP_INPUT"
+    INPUT_FILE="$TEMP_INPUT"
+else
+    INPUT_FILE="$CURRENT"
+fi
+
+# Check for empty file
+if [[ ! -s "$INPUT_FILE" ]]; then
+    RESULT=""
+else
+    if [[ "$USE_ERE" == true ]]; then
+        # Use extended regex - pattern is used as-is
+        RESULT=$(sed -E "s/${PATTERN}/${ESCAPED_REPLACEMENT}/${SED_FLAGS}" "$INPUT_FILE")
+    else
+        # Use basic regex - escape pattern for literal matching
+        ESCAPED_PATTERN=$(escape_pattern_basic "$PATTERN")
+        RESULT=$(sed "s/${ESCAPED_PATTERN}/${ESCAPED_REPLACEMENT}/${SED_FLAGS}" "$INPUT_FILE")
+    fi
+fi
+
+# Clean up temp file if created
+if [[ -n "${TEMP_INPUT:-}" ]]; then
+    rm -f "$TEMP_INPUT"
+fi
 
 if [[ "$PREVIEW_MODE" == true ]]; then
     # Preview mode: show diff without committing
@@ -122,3 +159,6 @@ fi
 
 # Commit the result
 echo "$RESULT" | wp_commit >/dev/null
+
+# Output result to stdout
+echo "$RESULT"
