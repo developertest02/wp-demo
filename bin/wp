@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# wp - Main dispatcher script for wp tools
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/wp-common.sh"
+
+usage() {
+    cat >&2 <<EOF
+Usage: wp <subcommand> [options]
+
+Subcommands:
+  init <file>       Initialize a new session with the given file
+  save [outfile]    Save current snapshot to outfile (or original source)
+  run <script>      Pipe current snapshot through bin/<script>
+  pipe              Cat current snapshot to stdout
+  status            Show session status
+  clean             Remove the session directory
+
+Run 'wp <subcommand> --help' for more information.
+EOF
+    exit 1
+}
+
+# Check if session exists (for commands that require it)
+require_session() {
+    local session_dir
+    session_dir="$(wp_session_dir)"
+    if [[ ! -d "$session_dir" ]] || [[ ! -e "$session_dir/current" ]]; then
+        wp_log ERR "No active session. Run 'wp init' first."
+        exit 1
+    fi
+}
+
+cmd_init() {
+    local file="${1:-}"
+    if [[ -z "$file" ]]; then
+        wp_log ERR "Usage: wp init <file>"
+        exit 1
+    fi
+    
+    if [[ ! -f "$file" ]]; then
+        wp_log ERR "File does not exist: $file"
+        exit 1
+    fi
+    
+    local session_dir
+    session_dir="$(wp_session_dir)"
+    local history_dir="$session_dir/history"
+    
+    # Create session structure
+    mkdir -p "$history_dir"
+    
+    # Copy file to first snapshot
+    local snapshot_file="$history_dir/0001.txt"
+    cp "$file" "$snapshot_file"
+    
+    # Create current symlink
+    ln -sfn "$snapshot_file" "$session_dir/current"
+    
+    # Write meta file
+    local abs_file
+    abs_file="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
+    cat > "$session_dir/meta" <<EOF
+seq=1
+source=$abs_file
+EOF
+    
+    echo "Initialized session with: $file"
+}
+
+cmd_save() {
+    require_session
+    
+    local outfile="${1:-}"
+    local session_dir
+    session_dir="$(wp_session_dir)"
+    local meta_file="$session_dir/meta"
+    
+    # If no outfile specified, use original source
+    if [[ -z "$outfile" ]]; then
+        if [[ -f "$meta_file" ]]; then
+            outfile="$(grep '^source=' "$meta_file" | cut -d'=' -f2-)"
+        fi
+        if [[ -z "$outfile" ]]; then
+            wp_log ERR "No output file specified and no source in meta"
+            exit 1
+        fi
+    fi
+    
+    local current
+    current="$(wp_current)"
+    cp "$current" "$outfile"
+    echo "Saved to: $outfile"
+}
+
+cmd_run() {
+    require_session
+    
+    local script="${1:-}"
+    shift || true
+    
+    if [[ -z "$script" ]]; then
+        wp_log ERR "Usage: wp run <script> [args]"
+        exit 1
+    fi
+    
+    local script_path="$SCRIPT_DIR/$script"
+    if [[ ! -x "$script_path" ]]; then
+        wp_log ERR "Script not found or not executable: $script"
+        exit 1
+    fi
+    
+    local current
+    current="$(wp_current)"
+    cat "$current" | "$script_path" "$@" | wp_commit >/dev/null
+}
+
+cmd_pipe() {
+    require_session
+    local current
+    current="$(wp_current)"
+    cat "$current"
+}
+
+cmd_status() {
+    require_session
+    
+    local session_dir
+    session_dir="$(wp_session_dir)"
+    local meta_file="$session_dir/meta"
+    local current
+    current="$(wp_current)"
+    
+    # Get source filename
+    local source_file=""
+    if [[ -f "$meta_file" ]]; then
+        source_file="$(grep '^source=' "$meta_file" | cut -d'=' -f2-)"
+        source_file="$(basename "$source_file")"
+    fi
+    
+    # Get sequence number
+    local seq
+    seq="$(wp_seq)"
+    
+    # Get word count
+    local word_count
+    word_count="$(wc -w < "$current")"
+    
+    echo "Source: $source_file"
+    echo "Snapshot: $seq"
+    echo "Words: $word_count"
+}
+
+cmd_clean() {
+    local session_dir
+    session_dir="$(wp_session_dir)"
+    
+    if [[ ! -d "$session_dir" ]]; then
+        echo "No session to clean."
+        return 0
+    fi
+    
+    # Prompt for confirmation
+    read -p "About to delete the session directory. Continue? [y/N] " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        rm -rf "$session_dir"
+        echo "Session cleaned."
+    else
+        echo "Cancelled."
+    fi
+}
+
+# Main dispatch
+if [[ $# -lt 1 ]]; then
+    usage
+fi
+
+subcommand="$1"
+shift
+
+case "$subcommand" in
+    init)
+        cmd_init "$@"
+        ;;
+    save)
+        cmd_save "$@"
+        ;;
+    run)
+        cmd_run "$@"
+        ;;
+    pipe)
+        cmd_pipe "$@"
+        ;;
+    status)
+        cmd_status "$@"
+        ;;
+    clean)
+        cmd_clean "$@"
+        ;;
+    -h|--help)
+        usage
+        ;;
+    *)
+        wp_log ERR "Unknown subcommand: $subcommand"
+        usage
+        ;;
+esac
