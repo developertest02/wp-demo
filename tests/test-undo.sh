@@ -7,7 +7,7 @@ WP_DIR="$(dirname "$SCRIPT_DIR")"
 export WP_SESSION=""
 
 source "$WP_DIR/lib/wp-common.sh"
-source "$SCRIPT_DIR/harness.sh"
+source "$SCRIPT_DIR/word_undo_test_harness.sh"
 
 # Test setup and cleanup
 setup_test_session() {
