@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# bin/wp-search - Search and replace filter for word processing tools
+# Performs search and replace on document text, reads from stdin, writes to stdout
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+LIB_DIR="$PROJECT_ROOT/lib"
+
+# Source common library
+source "$LIB_DIR/wp-common.sh"
+
+# Print usage information
+usage() {
+    cat >&2 <<EOF
+Usage: wp-search [OPTIONS] PATTERN REPLACEMENT
+
+Perform search and replace on document text.
+
+Options:
+  -i          Case-insensitive matching
+  -g          Replace all occurrences per line (default behavior)
+  -n N        Replace only the Nth occurrence globally (per line)
+  -r          PATTERN is an extended regular expression (ERE)
+  -p          Preview mode: show a colored diff, do not commit
+  -h, --help  Show this help message
+
+Arguments:
+  PATTERN     The text or regex to search for
+  REPLACEMENT The text to substitute in
+
+Note: When using -n N, only the Nth occurrence on each line is replaced,
+not globally across all lines.
+
+Input is read from stdin. Output is written to stdout.
+When not in preview mode, the result is committed via wp_commit.
+EOF
+}
+
+# Parse options
+CASE_INSENSITIVE=""
+NTH_OCCURRENCE=""
+USE_ERE=false
+PREVIEW_MODE=false
+GLOBAL_REPLACE="g"  # Default is global replace
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -i)
+            CASE_INSENSITIVE="I"
+            shift
+            ;;
+        -g)
+            GLOBAL_REPLACE="g"
+            shift
+            ;;
+        -n)
+            if [[ -z "${2:-}" ]]; then
+                wp_log ERR "Option -n requires an argument"
+                exit 1
+            fi
+            NTH_OCCURRENCE="$2"
+            shift 2
+            ;;
+        -r)
+            USE_ERE=true
+            shift
+            ;;
+        -p)
+            PREVIEW_MODE=true
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -*)
+            wp_log ERR "Unknown option: $1"
+            usage
+            exit 1
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+# Check for required arguments
+if [[ $# -lt 2 ]]; then
+    wp_log ERR "Usage: wp-search [OPTIONS] PATTERN REPLACEMENT"
+    exit 1
+fi
+
+PATTERN="$1"
+REPLACEMENT="$2"
+
+# Check that session exists (unless in preview mode with stdin)
+if ! wp_current &>/dev/null; then
+    wp_log ERR "No session active. Run 'wp init <file>' first."
+    exit 1
+fi
+
+# Build sed flags
+SED_FLAGS="$GLOBAL_REPLACE"
+if [[ -n "$CASE_INSENSITIVE" ]]; then
+    SED_FLAGS="${SED_FLAGS}${CASE_INSENSITIVE}"
+fi
+
+# Handle nth occurrence replacement
+if [[ -n "$NTH_OCCURRENCE" ]]; then
+    SED_FLAGS="$NTH_OCCURRENCE"
+fi
+
+# Build sed command
+SED_CMD="sed"
+if [[ "$USE_ERE" == true ]]; then
+    SED_CMD="sed -E"
+fi
+
+# Escape pattern and replacement for sed
+# Use | as delimiter to avoid issues with / in pattern/replacement
+# But still need to escape | characters
+ESCAPED_PATTERN=$(printf '%s' "$PATTERN" | sed 's/|/\\|/g')
+ESCAPED_REPLACEMENT=$(printf '%s' "$REPLACEMENT" | sed 's/|/\\|/g')
+
+# Create temp file for preview mode
+if [[ "$PREVIEW_MODE" == true ]]; then
+    TEMP_FILE=$(mktemp)
+    trap 'rm -f "$TEMP_FILE"' EXIT
+    
+    # Apply substitution to temp file
+    cat | $SED_CMD "s|${ESCAPED_PATTERN}|${ESCAPED_REPLACEMENT}|${SED_FLAGS}" > "$TEMP_FILE"
+    
+    # Show colored diff
+    diff --color=always "$(wp_current)" "$TEMP_FILE" || true
+    
+    # Exit without committing
+    exit 0
+fi
+
+# Normal mode: apply substitution and commit
+cat | $SED_CMD "s|${ESCAPED_PATTERN}|${ESCAPED_REPLACEMENT}|${SED_FLAGS}" | wp_commit
