@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# tests/harness.sh - Test harness for word processing tool tests
-# Source this file in test scripts: source tests/harness.sh
+# tests/word_search_test_harness.sh - Test harness for word processing tool tests
+# Source this file in test scripts: source tests/word_search_test_harness.sh
 set -uo pipefail
 
 # Global counters

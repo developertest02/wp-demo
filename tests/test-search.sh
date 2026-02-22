@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Source test harness
-source "$SCRIPT_DIR/harness.sh"
+source "$SCRIPT_DIR/word_search_test_harness.sh"
 
 # Source common library
 source "$PROJECT_ROOT/lib/wp-common.sh"
