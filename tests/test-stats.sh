@@ -9,7 +9,7 @@ BIN="$ROOT_DIR/bin/wp-stats"
 FIXTURE="$ROOT_DIR/tests/fixtures/sample.txt"
 
 # Source test harness
-source "$SCRIPT_DIR/harness.sh"
+source "$SCRIPT_DIR/stats_test_harness.sh"
 
 # Test 1: Known input, -w flag (word count)
 test_word_count() {
