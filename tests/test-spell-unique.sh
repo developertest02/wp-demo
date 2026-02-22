@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/harness.sh"
+source "$SCRIPT_DIR/spell_unique_test_harness.sh"
 
 # Test 1: Basic duplicates (cat, cat, dog -> cat, dog)
 result=$(printf 'cat\ncat\ndog\n' | bash "$SCRIPT_DIR/../bin/spell/wp-spell-unique")
