@@ -15,17 +15,20 @@ setup_session() {
     local content="${1:-}"
     SESSION_DIR=$(mktemp -d)
     export WP_SESSION="$SESSION_DIR"
-    
+
     mkdir -p "$SESSION_DIR/history"
-    
+
+    # Always create session files, even for empty content
     if [[ -n "$content" ]]; then
         echo "$content" > "$SESSION_DIR/history/0001.txt"
-        ln -sfn "$SESSION_DIR/history/0001.txt" "$SESSION_DIR/current"
-        cat > "$SESSION_DIR/meta" <<EOF
+    else
+        touch "$SESSION_DIR/history/0001.txt"
+    fi
+    ln -sfn "$SESSION_DIR/history/0001.txt" "$SESSION_DIR/current"
+    cat > "$SESSION_DIR/meta" <<EOF
 seq=1
 source=/tmp/test.txt
 EOF
-    fi
 }
 
 # Helper to clean up temp session
